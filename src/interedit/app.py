@@ -1,9 +1,10 @@
+import os
 import pathlib
 import subprocess
 import typing as t
 
 import attr
-import fuzzywuzzy
+import fuzzywuzzy.process
 import hyperlink
 import marshmallow
 import pyramid.config
@@ -11,7 +12,17 @@ import pyramid.response
 import pyramid.view
 import requests
 
+import interedit.github
 import interedit.schemas
+
+
+@attr.dataclass(frozen=True)
+class AppConfig:
+    username: str
+    token: str
+
+
+CONFIG = AppConfig(os.environ["GITHUB_USERNAME"], os.environ["GITHUB_TOKEN"])
 
 
 RST = t.TypeVar("RST", bound=str)
@@ -38,6 +49,7 @@ class EditRequest:
 
 @attr.dataclass(frozen=True)
 class RenderedDocument:
+    # TODO This class needs a better name.
     # TODO Make this feel more like `hyperlink.URL`.
     rendered_url: hyperlink.URL
 
@@ -61,7 +73,7 @@ class RenderedDocument:
     def raw_url(self):
         return self.rendered_url.replace(
             host="raw.githubusercontent.com",
-            path=[self.owner, self.repository, self.branch, self.path],
+            path=[self.owner, self.repository, self.branch] + list(self.path.path),
         )
 
     @property
@@ -83,32 +95,36 @@ edit_request_schema = interedit.schemas.schema(EditRequest)
 
 def html2rst(html: HTML) -> RST:
     return subprocess.run(
-        ["pandoc", "-f", "html", "-t", "rst"], input=html, check=True
+        ["pandoc", "-f", "html", "-t", "rst"],
+        input=html.encode(),
+        check=True,
+        stdout=subprocess.PIPE,
     ).stdout.decode()
 
 
 def apply_edit(original_markup: RST, edit_request: EditRequest) -> RST:
     paragraphs = original_markup.split("\n\n")
-
-    paragraph = fuzzywuzzy.extractOne(html2rst(edit_request.old_html), paragraphs)
+    old_rst: RST = html2rst(edit_request.old_html)
+    paragraph, _ = fuzzywuzzy.process.extractOne(old_rst, paragraphs)
     new_rst: RST = html2rst(edit_request.new_html)
-    return t.cast(RST, original_markup.replace(paragraph, new_rst))
+    whole_file_rst = original_markup.replace(paragraph, new_rst)
+    return t.cast(RST, whole_file_rst)
 
 
 @pyramid.view.view_config(renderer="json")
-def greet(request):
-    edit_request = edit_request_schema.load(dict(request.params))
+def handle_edit_request(request):
+    edit_request = edit_request_schema.load(dict(request.json_body))
     rendered_spec = parse_rendered_url(edit_request.rendered_rst_url)
     raw_body = requests.get(rendered_spec.raw_url).text
     edited = apply_edit(raw_body, edit_request)
-
+    interedit.github.request_edit(CONFIG.username, CONFIG.token, rendered_spec, edited)
     return pyramid.response.Response("ok")
 
 
 def main():
     with pyramid.config.Configurator() as config:
         config.add_route("hello", "/")
-        config.add_view(greet, route_name="hello")
+        config.add_view(handle_edit_request, route_name="hello")
         app = config.make_wsgi_app()
         return app
 

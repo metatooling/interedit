@@ -101,7 +101,7 @@ def create_pull_request(session, upstream, fork, head_branch):
     session.post(upstream.api_url.child("pulls"), json=data).raise_for_status()
 
 
-def main(username, token, upstream_document, text):
+def request_edit(username, token, upstream_document, text):
 
     sess = requests.Session()
     sess.auth = username, token
@@ -114,7 +114,7 @@ def main(username, token, upstream_document, text):
 
 
 if __name__ == "__main__":
-    main(
+    request_edit(
         os.environ["GITHUB_USERNAME"],
         os.environ["GITHUB_TOKEN"],
         upstream_document=interedit.app.RenderedDocument.from_text(
