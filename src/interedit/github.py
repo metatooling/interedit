@@ -96,7 +96,7 @@ def create_pull_request(session, upstream, fork, head_branch):
     data = {
         "base": upstream.branch,
         "head": f"{fork.owner}:{head_branch}",
-        "title": "Interactive edit",
+        "title": "Edit " + upstream.path.to_text(),
     }
     session.post(upstream.api_url.child("pulls"), json=data).raise_for_status()
 
