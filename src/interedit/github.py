@@ -9,6 +9,7 @@ import typing as t
 
 import hyperlink
 import requests
+import tenacity
 
 import interedit.app
 
@@ -65,14 +66,23 @@ def edit_file(
     return response.json()["commit"]["sha"]
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(requests.exceptions.HTTPError),
+    wait=tenacity.wait_fixed(10),
+    stop=tenacity.stop_after_attempt(3),
+)
+def _create_branch(session, doc, name, parent_sha):
+    url = doc.api_url.child("git").child("refs")
+    r = session.post(url, json={"ref": f"refs/heads/{name}", "sha": parent_sha})
+    r.raise_for_status()
+
+
 def create_branch(
     session: requests.Session, doc: interedit.app.RenderedDocument, parent_sha: SHA
 ) -> str:
-    url = doc.api_url.child("git").child("refs")
+
     name = "interdoc/" + "".join(random.choices(string.ascii_lowercase, k=10))
-    session.post(
-        url, json={"ref": f"refs/heads/{name}", "sha": parent_sha}
-    ).raise_for_status()
+    _create_branch(session, doc, name, parent_sha)
     return name
 
 
@@ -81,15 +91,8 @@ def fork_repository(session, doc) -> interedit.app.RenderedDocument:
     html_url = hyperlink.URL.from_text(r.json()["html_url"])
     url = html_url.replace(path=html_url.path + ("blob", doc.branch) + doc.path.path)
     new_doc = interedit.app.RenderedDocument(url)
-    while True:
-        # TODO Use async.
-        r = session.get(new_doc.api_url)
-        if r.status_code == 404:
-            time.sleep(30)
-        elif r.status_code == 200:
-            return new_doc
-        else:
-            r.raise_for_status()
+    session.get(new_doc.api_url).raise_for_status()
+    return new_doc
 
 
 def create_pull_request(session, upstream, fork, head_branch):
